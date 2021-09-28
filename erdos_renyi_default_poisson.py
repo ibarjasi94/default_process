@@ -9,8 +9,7 @@ import time
 import scipy.special
 import collections
 
-#modul stvara Erdos-Renyi graf te sadrži sve potrebno za propadanje čvorova u alpha i beta procesima
-#reshuffle vremena tih propadanja te mjerenje varijabli na grafu (lc,op,tp,thp)
+#The script contains an Erdos-Renyi graph class, that has functions to simulate the process, do the time reshuffling and count different motifs
 
 
 def subgraph_num(subgraph,graph):
@@ -37,54 +36,42 @@ class Erdos_Renyi():
         self.g.vp.t_part = self.g.new_vertex_property("bool")
         self.g.ep.causal = self.g.new_edge_property("bool")
         samci = []
-#        for v in self.g.get_vertices():
-#            if(len(self.g.get_in_edges(v)) == 0):
-#                samci.append(v)
-#        self.g.remove_vertex(samci)
+        self.g_c = self.g.copy()
 
     def set_directedness(self,directedness):
         self.g_c.set_directed(directedness)
 
-    def initial_properties(self, zeta):
+    def initial_properties(self, zeta, dynamics):
         self.g_c = self.g.copy()
         N = self.g_c.num_vertices()
-#        graph_draw(self.g_c, vertex_text = self.g_c.vertex_index, vertex_halo = self.g_c.vp.stecaj,vertex_font_size=12, output_size=(600, 600))
         vert_times = self.poisson_interevent(N,zeta)
-#        print(vert_interevent,"vert")
-#        vert_times = [np.sum(vert_interevent[0:i]) for i in range(0,len(vert_interevent))]
         rnd.shuffle(vert_times)
-#        print(len(vert_times))alpha,b
         self.index_time = dict()
-#        graph_draw(self.g_c, vertex_text = self.g_c.vertex_index, vertex_halo = self.g_c.vp.stecaj,vertex_font_size=12, output_size=(600, 600))
         for v in self.g_c.vertices():
-#            if(len(self.g_c.get_in_edges(v)) == 0):
-#                print(v,"samac")
             self.index_time[vert_times[-1]] = [self.g_c.vertex_index[v],"alpha"]
             self.g_c.vp.known[v] = True
             vert_times = vert_times[:-1]
         edge_interevent = self.poisson_interevent(self.g_c.num_edges(),1)
-#        print(edge_interevent, "beta times")
         for e in self.g_c.edges():
-            self.g_c.ep.time[e] = edge_interevent[-1]
+            if(dynamics == "VM"):
+                s,t = e
+                kin = t.in_degree()
+                self.g_c.ep.time[e] = edge_interevent[-1]*kin
+            elif(dynamics == "SI"):
+                self.g_c.ep.time[e] = edge_interevent[-1]
             edge_interevent = edge_interevent[:-1]
-#            print(self.g_c.ep.time[i])
         for e in self.g_c.edges():
             self.g_c.ep.causal[e] = False
-#        graph_draw(self.g_c, vertex_text = self.g_c.vertex_index, vertex_halo = self.g_c.vp.stecaj,vertex_font_size=12, output_size=(600, 600))
-#        print(self.g_c.num_edges(),"edges",self.g_c.num_vertices(),"vertices")
 
-    def process(self):
+    def process(self,exp_deg,zeta,N_vertices,frac_def):
         index_time_sorted = collections.OrderedDict(sorted(self.index_time.items()))
-#        print(index_time_sorted,"početna vremena")
         self.g_c.set_vertex_filter(self.g_c.vp.stecaj, inverted = True)
         nondefault = self.g_c.get_vertices()
         self.g_c.clear_filters()
-#        alpha = 0
-#        beta = 0
-#        n = 0 
-#        D = 450
-        while(len(nondefault) != 0):
-#            print(index_time_sorted,"update vremena")
+        pot = []
+        N_pot = 0
+        pot.append([0,0])
+        while((N_vertices - len(nondefault)) < frac_def*N_vertices):
             vert_time_list = list(index_time_sorted.keys())
             vert_time = vert_time_list[0]
             vert = index_time_sorted[vert_time][0]
@@ -94,51 +81,44 @@ class Erdos_Renyi():
                 index_time_list = list(index_time_sorted.items())
                 vert_time, vert_process = index_time_list[0]
                 vert,prcs = vert_process
-#            print(vert,vert_time,"čvor i vrijeme")
             del index_time_sorted[vert_time]   
-#            if(n < D):
-#                if(prcs == "alpha"):
-#                    alpha += 1
-#                else:
-#                    beta += 1
-#            print(index_time_sorted,"obrisani propali")False
+            self.g_c.set_vertex_filter(self.g_c.vp.stecaj, inverted = False)
+            in_edges = self.g_c.get_in_edges(vert)
+            self.g_c.clear_filters()
             self.g_c.set_vertex_filter(self.g_c.vp.stecaj, inverted = True)
             out_edges = self.g_c.get_out_edges(vert)
+            N_pot = N_pot + len(out_edges) - len(in_edges)
             for edge in out_edges:
                 s,t,i = edge
                 edge_time = self.g_c.ep.time[edge]
                 cascade_time = vert_time + edge_time
                 index_time_sorted[cascade_time] = [t,"beta"]
-#            print("propao", vert, "u", vert_time)
+            pot.append([vert_time,N_pot])
             self.g_c.vp.time[vert] = vert_time
             self.g_c.vp.stecaj[vert] = True
             nondefault = self.g_c.get_vertices()
             self.g_c.clear_filters()
             index_time_sorted = collections.OrderedDict(sorted(index_time_sorted.items()))
-#            n += 1
-#        graph_draw(self.g_c, vertex_text = self.g_c.vertex_index, vertex_font_size=12, output_size=(600, 600))
         time_list = self.g_c.vp.time.get_array()
-#        print(alpha, "alpha")
-#        print(beta, "beta")
-#        print(time_list,"original time list")
+        pot = np.asarray(pot)
+        return pot
 
-    def network_part(self,time_stops,l):
+    def network_part(self,time_frac_tot,l):
         time_list_p = list(self.g_c.vp.time.get_array())
         time_list_p.sort()
-        last = time_list_p[int((l+1)/time_stops*self.g_c.num_vertices())-1]
+        last = time_list_p[int((l+1)/time_frac_tot*self.g_c.num_vertices())-1]
         for v in self.g_c.vertices():
-            if(self.g_c.vp.time[v] < last):
+            if(self.g_c.vp.time[v] <= last):
                 self.g_c.vp.t_part[v] = True
         self.g_c.set_vertex_filter(self.g_c.vp.t_part)
-        
+        return last        
+
     def clear_graph(self):
         for i in self.g_c.vertices():
             self.g_c.vp.stecaj[i] = False
 
     def largest_component(self):
-#        graph_draw(self.g_c,  vertex_font_size=12, output_size=(600, 600))  
         l = gt.topology.label_largest_component(self.g_c, directed = False)
-#        graph_draw(self.g_c,  vertex_halo = l,vertex_font_size=12, output_size=(600, 600))
         u = gt.GraphView(self.g_c, vfilt=l)   
         return u.num_vertices()
         
@@ -150,54 +130,63 @@ class Erdos_Renyi():
         return onepath
     
     def two_path(self):
-        self.g_c.set_directed(False)
-        sub_two = gt.Graph(directed = False)
+        sub_twoI = gt.Graph(directed =True)
+        sub_twoV = gt.Graph(directed =True)
+        sub_twoΛ = gt.Graph(directed =True)
         for n in range(0,3):
-            sub_two.add_vertex()
-        edges = [[0,1],[1,2]]
-        sub_two.add_edge_list(edges)
-        sub_iso = subgraph_num(sub_two,self.g_c)
-        num = int(sub_iso/2)
-        self.g_c.set_directed(True)
-        return num
-    
+            sub_twoI.add_vertex()
+            sub_twoV.add_vertex()
+            sub_twoΛ.add_vertex()
+        edgesI = [[0,1],[1,2]]
+        edgesV= [[1,0],[1,2]]
+        edgesΛ = [[0,1],[2,1]]
+        sub_twoI.add_edge_list(edgesI)
+        sub_twoV.add_edge_list(edgesV)
+        sub_twoΛ.add_edge_list(edgesΛ)
+        sub_isoI= subgraph_num(sub_twoI,self.g_c)
+        sub_isoV= subgraph_num(sub_twoV,self.g_c)
+        sub_isoΛ= subgraph_num(sub_twoΛ,self.g_c)
+        numI = int(sub_isoI)
+        numV = int(sub_isoV)
+        numΛ = int(sub_isoΛ)
+        return numI, numV, numΛ
+       
     def three_path(self):
         self.g_c.set_directed(False)
         sub_three1 = gt.Graph(directed = False)
         sub_three2 = gt.Graph(directed = False)
+        sub_three3 = gt.Graph(directed = False)
         for n in range(0,4):
             sub_three1.add_vertex()
             sub_three2.add_vertex()
+        for n in range(0,3):
+            sub_three3.add_vertex()
         edges1 = [[0,1],[1,2],[2,3]]
         edges2 = [[0,1],[1,2],[1,3]]
+        edges3 = [[0,1],[1,2],[2,0]]
         sub_three1.add_edge_list(edges1)
         sub_three2.add_edge_list(edges2)
+        sub_three3.add_edge_list(edges3)
         sub_iso1 = subgraph_num(sub_three1,self.g_c)
         sub_iso2 = subgraph_num(sub_three2,self.g_c)
-        num = int(sub_iso1/2) + int(sub_iso2/6)
+        sub_iso3 = subgraph_num(sub_three3 ,self.g_c)
+        num = int(sub_iso1)/2 + int(sub_iso2)/6 + int(sub_iso3)/6
         self.g_c.set_directed(True)
         return num
-        
+ 
     def reset_edges(self):
         for i in self.g_c.edges():
             self.g_c.ep.causal[i] = False
         
     def only_causal(self):
-#        graph_draw(self.g_c, vertex_text = self.g_c.vertex_index, vertex_font_size=12, output_size=(600, 600))
-#        print("all default links")
-#        for v in self.g_c.vertices():
-#            print(v,self.g_c.vp.time[v], "vertex time")
         for i in self.g_c.edges():
-#            print("edge is", self.g_c.ep.causal[i])
             first,second = i
             first_time = self.g_c.vp.time[self.g_c.vertex(first)]
             second_time = self.g_c.vp.time[self.g_c.vertex(second)]
             if(first_time < second_time):
                 self.g_c.ep.causal[i] = True
-#                print("edge", i, "is", self.g_c.ep.causal[i])
         self.g_c.set_edge_filter(self.g_c.ep.causal)
-#        graph_draw(self.g_c, vertex_text = self.g_c.vertex_index, vertex_font_size=12, output_size=(600, 600))
-#        print("only causal links")
+
 
     def poisson_interevent(self,N,lam):
         uniform = np.random.rand(N)
@@ -208,11 +197,8 @@ class Erdos_Renyi():
         time_list = self.g_c.vp.time.get_array()
         rnd.shuffle(time_list)
         gt.map_property_values(self.g_c.vertex_index, self.g_c.vp.time, lambda x: time_list[x])   
-#        print(time_list)
-#        for i in self.g_c.vertices():
-#            print(i, self.g_c.vp.time[i])
+
         
     def remember_time(self):
         original_time = self.g_c.vp.time.get_array()
-#        print(original_time)
         return original_time

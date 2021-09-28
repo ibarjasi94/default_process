@@ -13,18 +13,16 @@ from graph_tool.all import *
 import pandas as pd
 import time
 import scipy.special
-import erdos_renyi_default_poisson #Poisson proces ili obični 
-import set_and_reshuffle_poisson
+import erdos_renyi_default_poisson_MH as erdos_renyi_default_poisson #Poisson proces ili obični 
+import set_and_reshuffle_poisson_MH as set_and_reshuffle_poisson
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 
-#glavni dio programa u kojem mijenjamo parametre erdos_renyi grafa 
-#sadrži petlju koja vrti po svim parametrima alpha (vjerojatnost slučajnog propadanja)
-#unutar je druga petlja koja vrti po broju različitih kreiranih grafova
-#u svakoj iteraciji za neki graf pozivamo funkciju process koja na njemu provede alpha beta i alphabeta 
-#procese te napravi statistiku (largest component, onepath, twopath, threepath)
-#nakon iteracija po svim zadanim grafovima, za dani alpha parametar napravimo još graf pvalues i graf
-#na kojem su svi skupljeni podaci
+#The main script that we use to set the parameters and iterate over them
+#For each iteration a function is called to simulate the process on the network and collect all the necessary statistics from the desired time points od the default process
+#All the arrays with the counts of statistics from the simulations are then saved as .npz files
+
+
 
 def parse_args():
     """Parse input arguments
@@ -45,97 +43,100 @@ def parse_args():
                         type=float,
                         default=1)
 
+    parser.add_argument('--dynamics',
+			help=('Finetuning scenario'),
+			type=str,
+			default="SI")
+
+    parser.add_argument('--N_vertices',
+                        help=('Finetuning scenario'),
+                        type=int,
+                        default=1000)
+    
+    parser.add_argument('--N_samples',
+			help=('Finetuning scenario'),
+			type=str,
+                        default="100,10,10")
+
     args = parser.parse_args()
     return args
 
 def run_process(args):
-	N_random_graphs = 100 #broj različitih grafova
-	N_processes = 10
-	N_random_shuffles = 100 #broj shuflleova na svakom grafu
-	N_vertices = 1000 #broj čvorova
-	time_stops = 20 #na koliko dijelova dijelimo ukupno vrijeme propadanja
-	exp_deg = args.exp_deg
-	p = exp_deg/(2*N_vertices)
+    N_samples = [int(item) for item in args.N_samples.split(',')]
+    N_random_graphs = N_samples[0] #number of different networks
+    N_processes = N_samples[1]
+    N_random_shuffles = N_samples[2] #number of shuffles on each network
+    N_vertices = args.N_vertices #number of vertices
+    time_frac_start = 5
+    time_frac_stop = 10
+    time_frac_tot = 20 #number of total time subdivisions
+    exp_deg = args.exp_deg
+    p = exp_deg/(2*N_vertices)
+    n_model = "Poisson"
+    dynamics = args.dynamics # "SI", "VM"
 
-	startTime = time.time()
-	zeta = args.zeta # alpha = 1 - čisti alfa proces, alpha = 0 - čisti beta proces
+    kmin = 0
+    kmax = 2*exp_deg+4
+    exp_deg_lim = [kmin,kmax,kmin,kmax]
+
+    zeta = args.zeta # alpha = 1 - pure exogenous, alpha = 0 - pure endogenous process (would not start without external contagion)
 	
-	ks_lc = [[] for i in range(0,time_stops)]
-	ks_op = [[] for i in range(0,time_stops)]
-	ks_tp = [[] for i in range(0,time_stops)]
-	ks_thp = [[] for i in range(0,time_stops)]
-	mean_std_stat = [[] for i in range(0,time_stops)]
-	p_lc = [[[] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	p_op = [[[] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	p_tp = [[[] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	p_thp = [[[] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	lc = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	op = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	tp = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	thp = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	largest = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	onepath = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	twopath = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
-	threepath = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(0,time_stops)]
+    lc = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    op = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    tpI = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    tpV = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    tpΛ = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]    
+    tp = [tpI, tpV, tpΛ]
+    thp = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    largest = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    onepath = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    twopathI = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    twopathV = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    twopathΛ = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
+    twopath = [twopathI,twopathV ,twopathΛ]
+    threepath = [[[[] for k in range(0,N_processes)] for j in range(0,N_random_graphs)] for i in range(time_frac_start,time_frac_stop)]
 
-	path = "/share/storage/IRENA_STORAGE/data/k={0},zeta={1}".format(exp_deg,zeta)
-
-	print(round(zeta,3), "z")
-	k = 0
-	#    bridovi = []
-	#    čvorovi = []
-	while(k < N_random_graphs):
-
-	    print(k)
-	    er = erdos_renyi_default_poisson.Erdos_Renyi(N_vertices,exp_deg,p)
-
-	#        bridovi.append(er.g.num_edges())
-	#        čvorovi.append(er.g.num_vertices())
-
-	    graph_on = False
+    perc_time = []
     
-	    i = 0    
-
-	    while(i < N_processes):
+    path = "/share/storage/IRENA_STORAGE/data/mahalanobis/k={0},zeta={1},dyn={2},N={3}".format(exp_deg,zeta,dynamics,N_vertices)
     
-	        set_and_reshuffle_poisson.process(graph_on, i, k, er, zeta, largest, onepath, twopath, threepath, lc, op, tp, thp, p_lc, p_op, p_tp, p_thp, exp_deg, N_vertices, N_random_shuffles, time_stops)
-		#print ('The script took {0} second !'.format(time.time() - startTime),"jedan k")
+    print(round(zeta,3), "z")
+    k = 0
 
-	        i += 1
-    
-	    k += 1
-    
-	#    print(bridovi)
-	#    print(np.mean(bridovi))
-	#    print(čvorovi)
-	#    print(np.mean(čvorovi))
-	#    deg = []
-	#    g = 0
-	#    while(g < N_random_graphs):
-	#        deg.append(round(2*bridovi[g]/čvorovi[g],2))
-	#        g += 1
-	#    print(deg)
-	#    print(np.mean(deg))
-	print ('The script took {0} second !'.format(time.time() - startTime),"konačno")    
-    
+    while(k < N_random_graphs):
+
+        print(k)
+        er = erdos_renyi_default_poisson.Erdos_Renyi(N_vertices,exp_deg,p)
+        tot_subgraphs = [er.largest_component(),er.one_path(),er.two_path(),er.three_path()]
 
 
-	set_and_reshuffle_poisson.signif_tests(largest, onepath, twopath, threepath, lc, op, tp, thp, ks_lc, ks_op, ks_tp, ks_thp, time_stops)
 
-	set_and_reshuffle_poisson.stats_to_tex(path, ks_lc, ks_op, ks_tp, ks_thp, p_lc, p_op, p_tp, p_thp, time_stops, zeta, exp_deg)
-      
-	pval = True
-	all_data = True
-	zstat = True
-	set_and_reshuffle_poisson.process_hist(mean_std_stat, zstat, path, pval, all_data, zeta, largest, onepath, twopath, threepath, lc, op, tp, thp, p_lc, p_op, p_tp, p_thp, exp_deg, N_vertices, N_random_graphs, N_processes, N_random_shuffles, time_stops)        
+        graph_on = False
         
+        i = 0    
 
-	print ('The script took {0} second !'.format(time.time() - startTime),"konačno")
+        while(i < N_processes):
+            
+            set_and_reshuffle_poisson.process(graph_on, i, k, er, zeta, largest, onepath, twopath, threepath,\
+                        lc, op, tp, thp, exp_deg, N_vertices, N_random_shuffles, time_frac_start, time_frac_stop,\
+                        time_frac_tot, perc_time, dynamics,tot_subgraphs)
 
+            i += 1
+            
+            
+        k += 1
+        
+    add = True        
+    set_and_reshuffle_poisson.process_save(add, path, zeta, largest, onepath, twopath, threepath, lc, op,\
+                                            tp, thp, exp_deg, N_vertices, time_frac_start, time_frac_stop, \
+                                                time_frac_tot, dynamics, perc_time)   
+
+         
+    
 def main():
     args = parse_args()
     print(args)
-    print(args.exp_deg, args.zeta)
+    print(args.exp_deg, args.zeta,args.dynamics)
     run_process(args)
 
 
